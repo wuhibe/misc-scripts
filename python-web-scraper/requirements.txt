@@ -1,0 +1,4 @@
+aiohttp==3.8.4
+bs4==0.0.1
+googlesearch-python==1.2.3
+google==3.0.0
