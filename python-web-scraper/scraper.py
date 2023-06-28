@@ -93,7 +93,7 @@ def scrape_organic_results(keyword):
     try:
         for result in search(keyword, lang="en", stop=60):
             r = result.split('/')[2]
-            if r not in domains:
+            if r not in domains and 'youtube.com' not in result:
                 domains.append(r)
                 organic_results.append(result)
             if len(organic_results) == 10:
@@ -129,9 +129,10 @@ async def scrape_paa_rs(keyword):
     content = await response.read()
     soup = BeautifulSoup(content, 'html.parser')
     tag = soup.body
-    ask_result = soup(text=lambda t: "People also ask" in t.text)
+    ask_result = soup(text=lambda t: 'People also ask' in t.text)
+    rss = soup(text=lambda t: 'Related searches' in t.text)
     ask_search_stringsTmp = []
-    if len(ask_result) > 0:
+    if len(ask_result) > 0 or len(rss) > 0:
         check = 0
         for string in tag.strings:
             if string.strip() == 'People also ask':
@@ -161,6 +162,11 @@ async def scrape_paa_rs(keyword):
             else:
                 loop = loop + 1
                 people_also_ask_data.append(paask)
+
+    while len(people_also_ask_data) < 4:
+        people_also_ask_data.append(None)
+    while len(search_strings) < 8:
+        search_strings.append(None)
     return (people_also_ask_data, search_strings)
 
 
@@ -181,7 +187,7 @@ async def main():
 
             organic_results = scrape_organic_results(keyword)
             await asyncio.sleep(random.randint(5, 15))
-            paas_rss = await scrape_paa_rs(keyword)
+            paas, rss = await scrape_paa_rs(keyword)
             titles = []
             descriptions = []
             headings = []
@@ -197,6 +203,6 @@ async def main():
 
             details = titles + descriptions + word_counts + headings
             write_to_csv(keyword, organic_results,
-                         paas_rss[0], paas_rss[1], details)
+                         paas, rss, details)
 
 asyncio.run(main())
