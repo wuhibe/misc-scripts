@@ -4,6 +4,7 @@ import random
 import aiohttp
 from bs4 import BeautifulSoup
 from googlesearch import search
+from urllib.parse import unquote, urlparse, parse_qs
 
 BROWSERS = (
     "Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2228.0 Safari/537.36",
@@ -28,6 +29,34 @@ async def make_requests(session, urls):
     return results
 
 
+def clean_str(s: str):
+    return s.strip().replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+
+
+def get_youtube_links(content):
+    soup = BeautifulSoup(content, 'html.parser')
+    youtube_links = []
+    for link in soup.find_all("a"):
+        if len(youtube_links) == 3:
+            break
+        try:
+            href = link.get("href")
+            href = unquote(href)  # Decode the URL
+            parsed_url = urlparse(href)
+            query_params = parse_qs(parsed_url.query)
+            href = query_params.get('url')
+            if href:
+                href = href[0]
+            if href and "youtube.com" in href and "watch?v=" in href and href not in youtube_links:
+                youtube_links.append(href)
+        except Exception:
+            pass
+    yt_links = youtube_links[:3]
+    while len(yt_links) < 3:
+        yt_links.append('-')
+    return yt_links
+
+
 async def fetch_url(session, url, index):
     try:
         print(f"\tFetching URL: {url}")
@@ -38,24 +67,24 @@ async def fetch_url(session, url, index):
             if not body:
                 return (index, None, None, None, None)
             # Extract the text from the <body> tag and exclude non-text elements
-            text = ' '.join(element.string.strip()
+            text = ' '.join(clean_str(element.string)
                             for element in body.descendants if isinstance(element, str))
             # Count the words
             word_count = len(text.split())
 
             # Scrape page title
-            title = soup.title.text.strip() if soup.title else ''
+            title = clean_str(soup.title.text) if soup.title else ''
             if not title:
                 og_title = soup.find('meta', property='og:title')
-                title = og_title['content'].strip() if og_title else ''
+                title = clean_str(og_title['content']) if og_title else ''
 
             # Scrape meta description
             meta_description = soup.find('meta', attrs={'name': 'description'})
-            meta_description = meta_description['content'].strip(
-            ) if meta_description else ''
+            meta_description = clean_str(
+                meta_description['content']) if meta_description else ''
 
             # Scrape headings
-            headings = ' |X| '.join(str(heading.text.strip()).replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+            headings = ' |X| '.join(clean_str(heading.text)
                                     for heading in soup.find_all(['h2', 'h3', 'h4']))
 
             return (index, title, meta_description, headings, word_count)
@@ -81,9 +110,16 @@ def initialize():
     for item in ['Title', 'Meta Description', 'Word Count', 'Heading']:
         for i in range(1, 6):
             header.append(f'{item} {i}')
+    for i in range(1, 4):
+        header.append(f'Youtube Link {i}')
     with open('output.csv', 'w', newline='', encoding='utf-8') as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(header)
+
+
+def is_not_image(url):
+    filetypes = ['jpg', 'jpeg', 'png', 'gif']
+    return not any([x in url for x in filetypes])
 
 
 def scrape_organic_results(keyword):
@@ -93,7 +129,7 @@ def scrape_organic_results(keyword):
     try:
         for result in search(keyword, lang="en", stop=60):
             r = result.split('/')[2]
-            if r not in domains and 'youtube.com' not in result:
+            if r not in domains and 'youtube.com' not in result and is_not_image(result):
                 domains.append(r)
                 organic_results.append(result)
             if len(organic_results) == 10:
@@ -128,6 +164,7 @@ async def scrape_paa_rs(keyword):
             pass
     content = await response.read()
     soup = BeautifulSoup(content, 'html.parser')
+    youtube_links = get_youtube_links(content)
     tag = soup.body
     ask_result = soup(text=lambda t: 'People also ask' in t.text)
     rss = soup(text=lambda t: 'Related searches' in t.text)
@@ -135,19 +172,19 @@ async def scrape_paa_rs(keyword):
     if len(ask_result) > 0 or len(rss) > 0:
         check = 0
         for string in tag.strings:
-            if string.strip() == 'People also ask':
+            if clean_str(string) == 'People also ask':
                 check = 1
-            if string.strip() == 'Related searches':
+            if clean_str(string) == 'Related searches':
                 check = 2
-            if string.strip() == 'Next >':
+            if clean_str(string) == 'Next >':
                 check = 0
-            if check < 1 or string.strip() == '':
+            if check < 1 or clean_str(string) == '':
                 continue
 
             if check == 2:
-                search_strings.append(string.strip())
+                search_strings.append(clean_str(string))
             if check == 1:
-                ask_search_stringsTmp.append(string.strip())
+                ask_search_stringsTmp.append(clean_str(string))
         loop = 0
 
         try:
@@ -167,7 +204,7 @@ async def scrape_paa_rs(keyword):
         people_also_ask_data.append(None)
     while len(search_strings) < 8:
         search_strings.append(None)
-    return (people_also_ask_data, search_strings)
+    return (people_also_ask_data, search_strings, youtube_links)
 
 
 async def main():
@@ -186,8 +223,9 @@ async def main():
             print(f"Scraping {keyword}")
 
             organic_results = scrape_organic_results(keyword)
-            await asyncio.sleep(random.randint(5, 15))
-            paas, rss = await scrape_paa_rs(keyword)
+            await asyncio.sleep(random.randint(7, 22))
+            paas, rss, yt_links = await scrape_paa_rs(keyword)
+            await asyncio.sleep(random.randint(10, 20))
             titles = []
             descriptions = []
             headings = []
@@ -201,7 +239,7 @@ async def main():
                 headings.append(heading)
                 word_counts.append(word_count)
 
-            details = titles + descriptions + word_counts + headings
+            details = titles + descriptions + word_counts + headings + yt_links
             write_to_csv(keyword, organic_results,
                          paas, rss, details)
 
