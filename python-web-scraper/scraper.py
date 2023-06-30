@@ -1,6 +1,7 @@
 import asyncio
 import csv
 import random
+import re
 import aiohttp
 from bs4 import BeautifulSoup
 from googlesearch import search
@@ -13,7 +14,7 @@ BROWSERS = (
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.3',
 )
 
-headers = {'user-agent': random.choice(BROWSERS)}
+headers = {'user-agent': BROWSERS[3]}
 session = None
 
 
@@ -30,7 +31,7 @@ async def make_requests(session, urls):
 
 
 def clean_str(s: str):
-    return s.strip().replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+    return s.strip().replace('\n', ' ').replace('\r', ' ').replace('\t', ' ').replace(';', ',')
 
 
 def get_youtube_links(content):
@@ -107,13 +108,15 @@ def initialize():
         header.append(f"People also ask {i}")
     for i in range(1, 9):
         header.append(f"Related searches {i}")
-    for item in ['Title', 'Meta Description', 'Word Count', 'Heading']:
+    for item in ['Title', 'Meta Description', 'Word Count']:
         for i in range(1, 6):
             header.append(f'{item} {i}')
     for i in range(1, 4):
         header.append(f'Youtube Link {i}')
+    for i in range(1, 6):
+        header.append(f'Heading {i}')
     with open('output.csv', 'w', newline='', encoding='utf-8') as csvfile:
-        writer = csv.writer(csvfile)
+        writer = csv.writer(csvfile, delimiter=';')
         writer.writerow(header)
 
 
@@ -144,8 +147,19 @@ def write_to_csv(keyword, organic_results, people_also_ask, related_searches, de
     row = [keyword] + organic_results + \
         people_also_ask + related_searches + details
     with open('output.csv', 'a', newline='', encoding='utf-8') as csvfile:
-        writer = csv.writer(csvfile)
+        writer = csv.writer(csvfile, delimiter=';')
         writer.writerow(row)
+
+
+def get_paas(soup):
+    paas = []
+    try:
+        data = soup.find_all('div', {"class": "related-question-pair"})
+        for d in data:
+            paas.append(d.get('data-q'))
+    except Exception as e:
+        pass
+    return paas
 
 
 async def scrape_paa_rs(keyword):
@@ -169,6 +183,8 @@ async def scrape_paa_rs(keyword):
     ask_result = soup(text=lambda t: 'People also ask' in t.text)
     rss = soup(text=lambda t: 'Related searches' in t.text)
     ask_search_stringsTmp = []
+    paas = get_paas(soup)
+
     if len(ask_result) > 0 or len(rss) > 0:
         check = 0
         for string in tag.strings:
@@ -176,29 +192,32 @@ async def scrape_paa_rs(keyword):
                 check = 1
             if clean_str(string) == 'Related searches':
                 check = 2
-            if clean_str(string) == 'Next >':
+            if clean_str(string) == 'Next' or clean_str(string) == 'Page Navigation':
                 check = 0
             if check < 1 or clean_str(string) == '':
                 continue
 
             if check == 2:
                 search_strings.append(clean_str(string))
-            if check == 1:
+            if check == 1 and len(paas) == 0:
                 ask_search_stringsTmp.append(clean_str(string))
-        loop = 0
 
         try:
+            print(search_strings)
             del search_strings[0:len(search_strings)-8]
+            print(search_strings)
         except Exception as e:
             pass
 
-        for paask in ask_search_stringsTmp:
-            if (loop > 4 or loop == 0):
-                loop = loop + 1
-                continue
-            else:
-                loop = loop + 1
+        pattern = re.compile(r'(\.|\!|\:|\;|\,|\-|\(|\)|\{|\}|\[|\]|·)')
+        for paask in ask_search_stringsTmp[1:]:
+            if not re.search(pattern, paask):
                 people_also_ask_data.append(paask)
+            if len(people_also_ask_data) == 4:
+                break
+
+    if len(paas) > 0:
+        people_also_ask_data = paas[0:4]
 
     while len(people_also_ask_data) < 4:
         people_also_ask_data.append(None)
@@ -239,7 +258,7 @@ async def main():
                 headings.append(heading)
                 word_counts.append(word_count)
 
-            details = titles + descriptions + word_counts + headings + yt_links
+            details = titles + descriptions + word_counts + yt_links + headings
             write_to_csv(keyword, organic_results,
                          paas, rss, details)
 
